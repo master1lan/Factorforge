@@ -256,6 +256,6 @@ func GrantReader(ctx context.Context, dsn string, b d.Binding, login string) err
 		return safe(err)
 	}
 	defer conn.Close(ctx)
-	_, err = conn.Exec(ctx, "INSERT INTO "+name+".instance_read_grant VALUES($1,$2,$3)", login, b.InstanceID, b.Environment)
+	_, err = conn.Exec(ctx, "INSERT INTO "+name+".instance_read_grant VALUES($1,$2,$3) ON CONFLICT DO NOTHING", login, b.InstanceID, b.Environment)
 	return safe(err)
 }

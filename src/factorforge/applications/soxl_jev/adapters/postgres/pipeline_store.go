@@ -204,7 +204,7 @@ func ConfigureQueueBudget(ctx context.Context, dsn string, policy QueueBudget) e
 		return safe(err)
 	}
 	defer conn.Close(ctx)
-	_, err = conn.Exec(ctx, "INSERT INTO "+schema+".budget VALUES($1,$2,$3,$4,$5,0,$6,$7,$8)", policy.Binding.InstanceID, policy.Kind, policy.Bucket, policy.MaxJobs, policy.MaxConcurrent, policy.ValidFrom, policy.ValidUntil, policy.PolicyRef)
+	_, err = conn.Exec(ctx, "INSERT INTO "+schema+".budget VALUES($1,$2,$3,$4,$5,0,$6,$7,$8) ON CONFLICT DO NOTHING", policy.Binding.InstanceID, policy.Kind, policy.Bucket, policy.MaxJobs, policy.MaxConcurrent, policy.ValidFrom, policy.ValidUntil, policy.PolicyRef)
 	return safe(err)
 }
 func OpenPipeline(ctx context.Context, dsn string, b d.Binding, kind string, maxBytes int) (*PipelineStore, error) {

@@ -15,18 +15,21 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strings"
 	"syscall"
 	"time"
 )
 
 func run() error {
-	action := flag.String("action", "", "init-storage, register-provider-budget, publish-projection, prepare-evidence, extract-candidates, compile-evidence, prepare-review, render-review, compile-calendar or export-evidence (no trades)")
+	action := flag.String("action", "", "init-storage, register-provider-budget, grant-reader, grant-pipeline, configure-queue-budget, publish-projection, prepare-evidence, extract-candidates, compile-evidence, prepare-review, render-review, compile-calendar or export-evidence (no trades)")
 	source := flag.String("config", "config/config.toml", "Canonical private config for this operator command only")
 	version := flag.Int64("expected-version", -1, "Existing read version; -1 only for initial publication")
 	proposalInput := flag.String("proposal-input", "", "Private closed JSON evidence and catalog request")
 	proposalOutput := flag.String("proposal-output", "", "New private JSON file under this repository runtime")
 	proposalBytes := flag.Int("max-proposal-bytes", 0, "Explicit input and output file byte budget")
 	semanticInput := flag.String("semantic-input", "", "Optional private semantic artifact for render-review only")
+	login := flag.String("login", "", "Existing database login role for grant actions")
+	kind := flag.String("kind", "", "Worker kind for grant-pipeline: INGEST, RESEARCH, TRADING, DYNAMIC or DYNAMIC_READ")
 	flag.Parse()
 	semanticProvided := false
 	flag.Visit(func(f *flag.Flag) {
@@ -99,7 +102,8 @@ func run() error {
 		defer store.Close()
 		return operations.ExportReviewBundleFile(ctx, store, profile.Binding(), root, *proposalInput, *proposalOutput, *proposalBytes)
 	}
-	if *action != "init-storage" && *action != "publish-projection" && *action != "register-provider-budget" {
+	if *action != "init-storage" && *action != "publish-projection" && *action != "register-provider-budget" &&
+		*action != "grant-reader" && *action != "grant-pipeline" && *action != "configure-queue-budget" {
 		return d.Fail("INSTANCE_CLI_ACTION_REQUIRED", 422)
 	}
 	path, err := filepath.Abs(*source)
@@ -130,6 +134,44 @@ func run() error {
 			}
 		}
 		return nil
+	}
+	if *action == "grant-reader" || *action == "grant-pipeline" {
+		path, err := filepath.Abs(*source)
+		if err != nil {
+			return d.Fail("INSTANCE_CONFIG_PATH_INVALID", 422)
+		}
+		profile, publication, err := config.LoadPublication(path)
+		if err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(profile.Settings.TimeoutSeconds)*time.Second)
+		defer cancel()
+		if *action == "grant-reader" {
+			return pg.GrantReader(ctx, publication.DatabaseURL, profile.Binding(), *login)
+		}
+		return pg.GrantPipeline(ctx, publication.DatabaseURL, profile.Binding(), *login, *kind)
+	}
+	if *action == "configure-queue-budget" {
+		root, err := os.Getwd()
+		if err != nil {
+			return d.Fail("INSTANCE_CONFIG_PATH_INVALID", 422)
+		}
+		policy, err := loadQueueBudget(root, *proposalInput, *proposalBytes)
+		if err != nil {
+			return err
+		}
+		path, err := filepath.Abs(*source)
+		if err != nil {
+			return d.Fail("INSTANCE_CONFIG_PATH_INVALID", 422)
+		}
+		profile, publication, err := config.LoadPublication(path)
+		if err != nil {
+			return err
+		}
+		policy.Binding = profile.Binding()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(profile.Settings.TimeoutSeconds)*time.Second)
+		defer cancel()
+		return pg.ConfigureQueueBudget(ctx, publication.DatabaseURL, policy)
 	}
 	if *action == "init-storage" {
 		if err = pg.InitializeProviderControl(ctx, publication.DatabaseURL); err != nil {
@@ -178,4 +220,46 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Println("INSTANCE_OPERATOR_OPERATION_RECORDED")
+}
+
+// loadQueueBudget reads one operator budget registration from the private
+// runtime tree. The binding comes from the canonical config, never the file.
+func loadQueueBudget(root, path string, maxBytes int) (pg.QueueBudget, error) {
+	var policy pg.QueueBudget
+	if maxBytes <= 0 || path == "" {
+		return policy, d.Fail("PIPELINE_BUDGET_REQUIRED", 422)
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return policy, d.Fail("PIPELINE_BUDGET_REQUIRED", 422)
+	}
+	base, err := filepath.Abs(root)
+	if err != nil {
+		return policy, d.Fail("PIPELINE_BUDGET_REQUIRED", 422)
+	}
+	rel, err := filepath.Rel(base, absolute)
+	if err != nil || filepath.IsAbs(rel) || !strings.HasPrefix(rel, "runtime"+string(filepath.Separator)) {
+		return policy, d.Fail("PIPELINE_BUDGET_REQUIRED", 422)
+	}
+	info, err := os.Lstat(absolute)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > int64(maxBytes) {
+		return policy, d.Fail("PIPELINE_BUDGET_REQUIRED", 422)
+	}
+	raw, err := os.ReadFile(absolute)
+	if err != nil || len(raw) > maxBytes {
+		return policy, d.Fail("PIPELINE_BUDGET_REQUIRED", 422)
+	}
+	var file struct {
+		Kind          string    `json:"kind"`
+		Bucket        string    `json:"bucket"`
+		PolicyRef     string    `json:"policy_ref"`
+		MaxJobs       int64     `json:"max_jobs"`
+		MaxConcurrent int64     `json:"max_concurrent"`
+		ValidFrom     time.Time `json:"valid_from"`
+		ValidUntil    time.Time `json:"valid_until"`
+	}
+	if d.DecodePrivate(raw, &file) != nil {
+		return policy, d.Fail("PIPELINE_BUDGET_REQUIRED", 422)
+	}
+	return pg.QueueBudget{Kind: file.Kind, Bucket: file.Bucket, PolicyRef: file.PolicyRef, MaxJobs: file.MaxJobs, MaxConcurrent: file.MaxConcurrent, ValidFrom: file.ValidFrom, ValidUntil: file.ValidUntil}, nil
 }

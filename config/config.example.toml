@@ -8,6 +8,7 @@ instance_id = "soxl-jev"
 
 [services]
 trading_api_url = ""
+proxy_url = ""
 framework_api_url = ""
 exchange_api_url = ""
 jev_api_url = ""

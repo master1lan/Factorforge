@@ -7,6 +7,7 @@ import (
 	d "github.com/AceNanako0721/Factorforge/src/factorforge/trading/domain"
 	"github.com/pelletier/go-toml/v2"
 	"math"
+	"net/url"
 	"os"
 )
 
@@ -19,6 +20,7 @@ type Config struct {
 		ExecutionDatabaseURL string `toml:"execution_database_url"`
 		ExchangeAPIURL       string `toml:"exchange_api_url"`
 		TradingAPIURL        string `toml:"trading_api_url"`
+		ProxyURL             string `toml:"proxy_url"`
 	} `toml:"services"`
 	Credentials struct {
 		TradingAPIToken   string `toml:"trading_api_token"`
@@ -55,6 +57,23 @@ type Config struct {
 }
 
 func invalid(code string, status int) error { return &d.Error{Code: code, Status: status} }
+
+// validProxy accepts an empty value (direct connection) or an absolute
+// http, https or socks5 proxy URL.
+func validProxy(value string) bool {
+	if value == "" {
+		return true
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Host == "" {
+		return false
+	}
+	switch parsed.Scheme {
+	case "http", "https", "socks5", "socks5h":
+		return true
+	}
+	return false
+}
 func Load(path string) (Config, error) {
 	var config Config
 	data, err := os.ReadFile(path)
@@ -68,6 +87,9 @@ func Load(path string) (Config, error) {
 		if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || value > float64(math.MaxInt64)/float64(1e9) {
 			return config, invalid("PRIVATE_CONFIGURATION_INVALID", 503)
 		}
+	}
+	if !validProxy(config.Services.ProxyURL) {
+		return config, invalid("PRIVATE_CONFIGURATION_INVALID", 503)
 	}
 	return config, nil
 }

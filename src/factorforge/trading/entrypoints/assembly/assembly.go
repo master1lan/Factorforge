@@ -11,6 +11,7 @@ import (
 	a "github.com/AceNanako0721/Factorforge/src/factorforge/trading/application"
 	d "github.com/AceNanako0721/Factorforge/src/factorforge/trading/domain"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -32,9 +33,23 @@ func Exit(err error) {
 	}
 	os.Exit(1)
 }
-func Client(timeout time.Duration) *http.Client {
+// Client builds the direct client used behind isolation; it never proxies.
+func Client(timeout time.Duration) *http.Client { return clientWithProxy(timeout, "") }
+
+// ClientVia builds an outbound client for external probes and market reads.
+// An empty proxyURL keeps the direct connection; otherwise the configured
+// proxy is used so hosts unreachable from this network stay readable.
+func ClientVia(timeout time.Duration, proxyURL string) *http.Client {
+	return clientWithProxy(timeout, proxyURL)
+}
+func clientWithProxy(timeout time.Duration, proxyURL string) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
+	if proxyURL != "" {
+		if parsed, err := url.Parse(proxyURL); err == nil {
+			transport.Proxy = http.ProxyURL(parsed)
+		}
+	}
 	return &http.Client{Transport: transport, Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
 func Assemble(ctx context.Context, config c.Config, recover bool) (*postgres.Store, *a.Service, error) {
@@ -63,7 +78,7 @@ func Assemble(ctx context.Context, config c.Config, recover bool) (*postgres.Sto
 			store.Close()
 			return nil, nil, &d.Error{Code: "CLOCK_PROBE_POLICY_REQUIRED", Status: 503}
 		}
-		service.Health = &health.Probe{StoragePath: settings.StoragePath, ClockOffset: health.ClockProbe(Client(time.Duration(settings.TimeoutSeconds*float64(time.Second))), settings.ClockProbeURL, time.Now)}
+		service.Health = &health.Probe{StoragePath: settings.StoragePath, ClockOffset: health.ClockProbe(ClientVia(time.Duration(settings.TimeoutSeconds*float64(time.Second)), config.Services.ProxyURL), settings.ClockProbeURL, time.Now)}
 	}
 	if recover {
 		key, err := store.BoundRun(ctx, p.AccountID)

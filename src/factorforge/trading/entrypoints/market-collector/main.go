@@ -44,7 +44,7 @@ func run() error {
 	}
 	ctx, cancel := r.Context()
 	defer cancel()
-	market := &binance.Market{Client: r.Client(10 * time.Second), Endpoint: config.Services.ExchangeAPIURL, Multipliers: map[string]string{*instrument: *multiple}, PublicationDelay: time.Duration(*delay) * time.Millisecond, SimCapabilities: *simCapabilities}
+	market := &binance.Market{Client: r.ClientVia(10*time.Second, config.Services.ProxyURL), Endpoint: config.Services.ExchangeAPIURL, Multipliers: map[string]string{*instrument: *multiple}, PublicationDelay: time.Duration(*delay) * time.Millisecond, SimCapabilities: *simCapabilities}
 	client := &httptrading.Client{HTTP: r.Client(15 * time.Second), Endpoint: config.Services.TradingAPIURL, Token: config.Credentials.TradingAPIToken}
 	collector := &workers.Collector{Market: market, Client: client, Key: d.RunKey{Environment: config.Runtime.Environment, AccountID: config.Trading.AccountID, RunID: *id}, TradeLimit: *limit, SimFrames: *simFrames}
 	for {

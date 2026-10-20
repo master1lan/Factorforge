@@ -41,7 +41,13 @@ func (c Client) Generate(parent context.Context, id, input string) (d.SemanticGe
 	if s.MaxLineBytes == int(^uint(0)>>1) || s.TimeoutSeconds > int64((1<<63-1)/int64(time.Second)) || s.CleanupSeconds > int64((1<<63-1)/int64(time.Second)) {
 		return result, d.Fail("SEMANTIC_INPUT_INVALID", 422)
 	}
-	if !s.Enabled || !regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`).MatchString(id) || strings.TrimSpace(input) == "" || !utf8.ValidString(input) || len(input) > s.MaxInputBytes || s.MaxLineBytes <= 0 || s.MaxOutputBytes <= 0 || s.TimeoutSeconds <= 0 || s.CleanupSeconds <= 0 {
+	if !s.Enabled || !regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`).MatchString(id) || strings.TrimSpace(input) == "" || !utf8.ValidString(input) || len(input) > s.MaxInputBytes || s.MaxOutputBytes <= 0 || s.TimeoutSeconds <= 0 {
+		return result, d.Fail("SEMANTIC_INPUT_INVALID", 422)
+	}
+	if s.Channel == "chat" {
+		return c.chatGenerate(parent, s, id, input)
+	}
+	if s.MaxLineBytes <= 0 || s.CleanupSeconds <= 0 {
 		return result, d.Fail("SEMANTIC_INPUT_INVALID", 422)
 	}
 	request := struct {

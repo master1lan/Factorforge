@@ -65,6 +65,17 @@ runtime/bin/instance-cli --action publish-projection --config config/config.toml
 
 `-1` 只用于首份快照，后续明确登记当前读取版本。数据库登录/授权和 QueueBudget 由独立操作者配置；只读 API 不接收 publication 连接、不初始化表、不领取任务、不调用模型。查询不触发发布。当前投影未有测量的来源失败、成本、生产探针/标定及 LIVE 能力保持 unknown/null，不把本地测试填成现场健康。
 
+## 抽取通道：OMP 与 OpenAI 兼容 chat（2026-10-20 追加）
+
+`semantic_extraction` 新增可选 `channel`。缺省仍是 OMP（`omp-cli.js`，v2 协议，OAuth 账号）。`channel = "chat"` 时，Go 客户端直接调用 `[model_access] api_base_url` 的 `POST {base}/chat/completions`：
+
+- 只读取 `[model_access]` 的 `api_base_url` / `api_key` / `prompt_file`，密钥不进入派生 worker 档案，也不写入任何产物；`prompt_file` 必须位于 `prompts/` 且不得是示例文件，正文取 `instructions` 字段。
+- 请求固定 `temperature=0`、`stream=false`、`response_format=json_object`，`max_tokens` 由输出字节预算推导并封顶 8000；响应整体受 `max_output_bytes` 限制，供应商额外字段（reasoning、logprobs、usage 明细）不解析、不落盘。
+- 一次操作最多两次 HTTP 交换：仅当 200 响应不是单个合法 JSON 对象、或 5xx 时重试一次；429、4xx 与模型名不符不重试。输出仍由 `CompileSemanticCandidates` 逐条校验引文与目录，任何歧义整体拒绝。
+- 该通道只替代"候选生成"，不改变审阅闸门：候选仍需 `prepare-review`/`render-review` 人工审阅、`compile-evidence` 固化后才进入 worker。`AnnotatedExtractor` 与 `EXTRACTION_INCOMPLETE` 隔离行为不变。
+
+已实测：真实 SEC 8-K（AMD，2026-09-26，item 3.02）经 `runtime/filing-to-candidates.sh` 产出 1 条带精确引文的候选；本地新闻证据产出 2 条。两条既有语义测试（`TestSemanticConfigUnlimitedAndRequiredBoundaries`、`TestSemanticActualBunProtocol`）在本机修改前即失败，与本次通道无关。
+
 ## 已验证与剩余范围
 
 G4 后续追加 `003_operations.sql`：来源、搜索、输入、模型和提交的稳定代码/真实检查时间进入不可改 operation_fact；没有私有 URL、异常正文或供应商载荷。实际认证角色、RLS 及操作分区校验阻止研究伪造交易/采集活动；只读角色不能写。来源失败不会抹掉其他来源成功结果，保留最后成功/失败、当前未完成任务的最早时间和已记录降级原因。job 审计使用实际创建/领取/开始/完成时间，发布读取时间不会替代历史事件时间。

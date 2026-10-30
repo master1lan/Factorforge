@@ -48,7 +48,7 @@ func Open(ctx context.Context, dsn, environment string) (*Store, error) {
 	}
 	return &Store{pool: pool, environment: environment, schema: schema, candleBackfilled: map[string]bool{}}, nil
 }
-func (s *Store) Close()              { s.pool.Close() }
+func (s *Store) Close() { s.pool.Close() }
 
 // PruneMarketTrades deletes at most batch rows older than before through the
 // definer function; the API role has no table-level DELETE (design 26).
@@ -425,7 +425,13 @@ func (s *Store) persist(ctx context.Context, tx pgx.Tx, run *d.Aggregate, prior 
 					continue
 				}
 			}
-			if _, err := tx.Exec(ctx, "INSERT INTO "+s.table(table)+"(account_id,resource_id,payload) VALUES($1,$2,$3::jsonb) "+conflict(table), run.RunKey.AccountID, identity, []byte(value)); err != nil {
+			query := "INSERT INTO " + s.table(table) + "(account_id,resource_id,payload) VALUES($1,$2,$3::jsonb) " + conflict(table)
+			if table == "market_trade" {
+				// v2.21.0 retention reads a real timestamp column; keep it in
+				// step with the validated payload on every insert.
+				query = "INSERT INTO " + s.table(table) + "(account_id,resource_id,payload,observed_at) VALUES($1,$2,$3::jsonb,(($3::jsonb)->>'observed_at')::timestamptz) " + conflict(table)
+			}
+			if _, err := tx.Exec(ctx, query, run.RunKey.AccountID, identity, []byte(value)); err != nil {
 				return sqlError(err)
 			}
 		}

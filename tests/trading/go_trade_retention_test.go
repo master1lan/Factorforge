@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/AceNanako0721/Factorforge/src/factorforge/trading/adapters/postgres"
+	d "github.com/AceNanako0721/Factorforge/src/factorforge/trading/domain"
+	"github.com/AceNanako0721/Factorforge/src/factorforge/trading/domain/decimal"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -68,5 +70,52 @@ func TestS115MarketTradeRetentionPrune(t *testing.T) {
 	}
 	if _, err = conn.Exec(ctx, "SELECT trading_sim.prune_market_trade(now() - interval '40 days', 10)"); err != nil {
 		t.Fatalf("app role execute %v", err)
+	}
+}
+
+// v2.21.0: the ordered projection insert must fill observed_at, otherwise the
+// collector's trades violate the NOT NULL retention column and every ingest
+// fails with STORE_UNAVAILABLE.
+func TestV2210MarketTradeProjectionWritesObservedAt(t *testing.T) {
+	ctx := context.Background()
+	server, err := postgres.StartTemporary(ctx, t.TempDir(), nativePostgresBin(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	store, err := postgres.Open(ctx, server.SIMDSN, "SIM")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	admin, err := pgx.Connect(ctx, server.AdminDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close(ctx)
+	run, _, _, _ := serviceBase(t)
+	if err = store.Create(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	code := run.Specs.Keys()[0]
+	spec := run.Specs.Value(code)
+	at := time.Now().UTC().Truncate(time.Second)
+	price, err := decimal.Parse("1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := code + ":fixture-trade-1"
+	if err = store.Transaction(ctx, run.RunKey, func(r *d.Aggregate) error {
+		r.MarketTrades.Set(identity, &d.MarketTrade{ExternalID: "fixture-trade-1", InstrumentKey: spec.Key, SourceID: "fixture", ObservedAt: at, ReceivedAt: at, AvailableAt: at, Price: price, Quantity: price, SpecVersion: spec.Version})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var observed time.Time
+	if err = admin.QueryRow(ctx, "SELECT observed_at FROM trading_sim.market_trade WHERE resource_id=$1", identity).Scan(&observed); err != nil {
+		t.Fatal("market trade projection missing observed_at", err)
+	}
+	if !observed.Equal(at) {
+		t.Fatalf("observed_at %v", observed)
 	}
 }
